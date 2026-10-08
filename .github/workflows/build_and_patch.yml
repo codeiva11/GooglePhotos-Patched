@@ -176,6 +176,7 @@ jobs:
           java -jar morphe-cli.jar patch \
             -f \
             -p "${{ env.PATCH_PATH }}" \
+            -e "Enable DCIM folders backup control" \
             -d "Custom Morphe branding" \
             --unsigned \
             -o patched-mod-unsigned.apk \
@@ -187,6 +188,7 @@ jobs:
             -p "${{ env.PATCH_PATH }}" \
             -e "Change to official package name" \
             -e "Disable Play Store updates" \
+            -e "Enable DCIM folders backup control" \
             -d "Custom Morphe branding" \
             --unsigned \
             -o patched-original-unsigned.apk \
