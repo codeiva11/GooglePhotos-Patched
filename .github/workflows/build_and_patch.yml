@@ -26,6 +26,37 @@ jobs:
     steps:
       - name: Checkout Release Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync and Merge Upstream Commits
+        id: sync_upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "Configuring upstream remote..."
+          git remote add upstream https://github.com/Akash-Sriram/GooglePhotos-Patched.git || true
+          git fetch upstream main
+
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          echo "Upstream HEAD: $UPSTREAM_HEAD"
+          echo "Local HEAD:    $LOCAL_HEAD"
+
+          if [ "$UPSTREAM_HEAD" != "$LOCAL_HEAD" ]; then
+            echo "Attempting to merge upstream/main..."
+            if git merge upstream/main --no-edit -m "chore: sync with upstream Akash-Sriram/GooglePhotos-Patched [skip ci]"; then
+              echo "Merged upstream successfully. Pushing to fork..."
+              git push origin main || true
+            else
+              echo "Merge conflict detected; aborting merge to preserve local fixes..."
+              git merge --abort || true
+            fi
+          else
+            echo "Fork is already up to date with upstream."
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v5
