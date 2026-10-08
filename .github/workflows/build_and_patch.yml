@@ -274,18 +274,19 @@ jobs:
         if: steps.check_release.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="v${{ env.RELEASE_VERSION }}"
           TITLE="Google Photos v${{ env.RELEASE_VERSION }}"
           APK_MOD="${{ env.RELEASE_APK_MOD }}"
           APK_ORIGINAL="${{ env.RELEASE_APK_ORIGINAL }}"
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists. Overwriting APK assets..."
-            gh release upload "$TAG" "$APK_MOD" "$APK_ORIGINAL" --clobber
-            gh release edit "$TAG" --title "$TITLE" --latest
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release $TAG exists in $GH_REPO. Overwriting APK assets..."
+            gh release upload "$TAG" "$APK_MOD" "$APK_ORIGINAL" --repo "$GH_REPO" --clobber
+            gh release edit "$TAG" --repo "$GH_REPO" --title "$TITLE" --latest
           else
-            echo "Creating new release $TAG..."
-            gh release create "$TAG" "$APK_MOD" "$APK_ORIGINAL" --title "$TITLE" --latest
+            echo "Creating new release $TAG in $GH_REPO..."
+            gh release create "$TAG" "$APK_MOD" "$APK_ORIGINAL" --repo "$GH_REPO" --title "$TITLE" --latest
           fi
 
