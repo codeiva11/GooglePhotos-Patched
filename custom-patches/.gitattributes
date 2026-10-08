@@ -1,0 +1,6 @@
+# Protect custom patches during upstream merges
+# These files should always prefer our version during conflicts
+
+extensions/shared/library/src/main/java/app/morphe/extension/shared/updater/GitHubReleaseChecker.java merge=ours
+patches/src/main/kotlin/app/morphe/patches/googlephotos/misc/backup/DefaultBackupSettingsPatch.kt merge=ours
+extensions/shared/library/src/main/java/app/morphe/extension/shared/patches/BackupSettingsSeeder.java merge=ours
