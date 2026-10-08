@@ -18,7 +18,7 @@ on:
 jobs:
   build-and-patch:
     name: Build Patch & Release Google Photos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: read
@@ -68,7 +68,7 @@ jobs:
 
       - name: Setup Java 21
         if: steps.check_release.outputs.skip != 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -164,8 +164,26 @@ jobs:
       - name: Sign Patched APKs
         if: steps.check_release.outputs.skip != 'true'
         run: |
-          # Decode keystore from secret
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          # Generate or decode keystore
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Using secret KEYSTORE_BASE64..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+            KS_PASS="android"
+            KEY_PASS="android"
+          else
+            echo "No KEYSTORE_BASE64 secret found. Creating standalone release keystore..."
+            keytool -genkeypair -v \
+              -keystore release.keystore \
+              -alias release \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=GooglePhotos, OU=Patched, O=Morphe, L=Mountain View, ST=CA, C=US"
+            KS_PASS="android"
+            KEY_PASS="android"
+          fi
 
           # Determine version string and sanitize trailing dots
           APK_VER="${{ steps.get_apk_ver.outputs.apk_version }}"
@@ -193,7 +211,7 @@ jobs:
 
             # 3. Sign the aligned APK with apksigner
             TARGET_OUT=$([ "$FLAVOR" = "mod" ] && echo "$OUT_MOD" || echo "$OUT_ORIGINAL")
-            $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:android --key-pass pass:android --out "${TARGET_OUT}" patched-${FLAVOR}-aligned.apk
+            $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:${KS_PASS} --key-pass pass:${KEY_PASS} --out "${TARGET_OUT}" patched-${FLAVOR}-aligned.apk
 
             # 4. Verify zipalign and apksigner
             echo "Verifying zipalign for ${TARGET_OUT}..."
@@ -204,7 +222,7 @@ jobs:
             rm -f patched-${FLAVOR}-fixed.apk patched-${FLAVOR}-aligned.apk
           done
           
-          # Clean up decrypted keystore
+          # Clean up keystore
           rm -f release.keystore
 
       - name: Upload Mod APK Artifact
