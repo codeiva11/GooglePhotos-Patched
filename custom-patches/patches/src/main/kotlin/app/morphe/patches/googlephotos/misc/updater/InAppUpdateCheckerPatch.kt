@@ -38,7 +38,7 @@ val inAppUpdateCheckerPatch = bytecodePatch(
 
     val releaseApiUrl by stringOption(
         key = "releaseApiUrl",
-        default = "https://api.github.com/repos/Akash-Sriram/GooglePhotos-Patched/releases/latest",
+        default = "https://api.github.com/repos/codeiva11/GooglePhotos-Patched/releases/latest",
         title = "GitHub Release API URL",
         description = "Endpoint to check for the latest patched Google Photos APK release.",
         required = true,
