@@ -2,7 +2,7 @@ package app.morphe.patches.googlephotos.misc.backup
 
 import app.morphe.patcher.patch.bytecodePatch
 import app.morphe.patches.shared.compat.AppCompatibilities
-import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
 import app.morphe.patches.googlephotos.misc.gms.HomeActivityOnCreateFingerprint
 
 @Suppress("unused")
@@ -15,11 +15,9 @@ val defaultBackupSettingsPatch = bytecodePatch(
     compatibleWith(AppCompatibilities.GOOGLE_PHOTOS)
 
     execute {
-        HomeActivityOnCreateFingerprint.result!!.mutableMethod.addInstructions(
+        HomeActivityOnCreateFingerprint.method.addInstruction(
             0,
-            """
-                invoke-static {p0}, Lapp/morphe/extension/shared/patches/BackupSettingsSeeder;->seedDefaultBackupSettings(Landroid/content/Context;)V
-            """
+            "invoke-static {p0}, Lapp/morphe/extension/shared/patches/BackupSettingsSeeder;->seedDefaultBackupSettings(Landroid/content/Context;)V"
         )
     }
 }
