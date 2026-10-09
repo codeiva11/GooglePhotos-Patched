@@ -35,6 +35,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config merge.ours.driver true
 
           echo "Configuring upstream remote..."
           git remote add upstream https://github.com/Akash-Sriram/GooglePhotos-Patched.git || true
