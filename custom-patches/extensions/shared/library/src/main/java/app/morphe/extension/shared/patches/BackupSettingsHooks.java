@@ -20,7 +20,7 @@ import java.util.Set;
 /**
  * Bytecode hooks and initializers for default Google Photos backup settings.
  *
- * Guarantees by default on fresh install, upgrade, or account sign-in:
+ * Guarantees by default on fresh install or upgrade:
  * 1. Daily data cap = Long.MAX_VALUE (Unlimited mobile data)
  * 2. Back up videos over data = true
  * 3. Back up while roaming = true
@@ -32,8 +32,7 @@ public final class BackupSettingsHooks {
     private BackupSettingsHooks() {}
 
     private static final String BACKUP_PREFS_FILE = "photos.backup.backup_prefs";
-    private static final String KEY_USER_CUSTOMIZED_MOBILE_DATA = "morphe_user_customized_mobile_data";
-    private static final String KEY_FOLDERS_SEEDED = "morphe_camera_folders_seeded_v1";
+    private static final String KEY_APPLIED = "morphe_backup_defaults_applied_v6";
 
     // Preference keys from APK disassembly (rzs enum)
     private static final String KEY_DAILY_DATA_CAP = "backup_prefs_daily_data_cap";
@@ -140,86 +139,31 @@ public final class BackupSettingsHooks {
         if (context == null) return;
         try {
             SharedPreferences prefs = context.getSharedPreferences(BACKUP_PREFS_FILE, Context.MODE_PRIVATE);
-            boolean userCustomized = prefs.getBoolean(KEY_USER_CUSTOMIZED_MOBILE_DATA, false);
-            boolean foldersSeeded = prefs.getBoolean(KEY_FOLDERS_SEEDED, false);
-
-            SharedPreferences.Editor editor = prefs.edit();
-
-            if (!userCustomized) {
-                editor.putLong(KEY_DAILY_DATA_CAP, Long.MAX_VALUE);
-                editor.putBoolean(KEY_USE_UNRESTRICTED_DATA, true);
-                editor.putBoolean(KEY_HAS_UNRESTRICTED_DATA_OPTIONS, true);
-                editor.putBoolean(KEY_BACKUP_WHEN_ROAMING, true);
-                editor.putBoolean(KEY_USE_DATA_FOR_PHOTOS, true);
-                editor.putBoolean(KEY_USE_DATA_FOR_VIDEOS, true);
-            }
-
-            if (!foldersSeeded) {
-                Set<String> cameraBuckets = resolveCameraBucketIds(context);
-                Set<String> existingFolders = prefs.getStringSet(KEY_LOCAL_BACKUP_FOLDERS, null);
-                Set<String> mergedFolders = new HashSet<>(cameraBuckets);
-                if (existingFolders != null) {
-                    mergedFolders.addAll(existingFolders);
-                }
-                editor.putStringSet(KEY_LOCAL_BACKUP_FOLDERS, mergedFolders);
-                editor.putBoolean(KEY_FOLDERS_SEEDED, true);
-            }
-
-            editor.commit();
-            Logger.printInfo(() -> "Morphe: Seeded backup defaults (userCustomized=" + userCustomized + ", foldersSeeded=" + foldersSeeded + ")");
-        } catch (Throwable t) {
-            Logger.printException(() -> "Morphe: Failed to seed backup defaults", t);
-        }
-    }
-
-    /**
-     * Hooked at the beginning of BackupPreferencesStore.o() to intercept preference writes.
-     */
-    public static void onSavePreferences(Object oldRzu, Object newRzu, Object stlReason, Object rzvStore) {
-        if (rzvStore == null || newRzu == null) return;
-        try {
-            Context context = getContextFromStore(rzvStore);
-            if (context == null) return;
-
-            SharedPreferences prefs = context.getSharedPreferences(BACKUP_PREFS_FILE, Context.MODE_PRIVATE);
-
-            String reasonStr = stlReason != null ? String.valueOf(stlReason) : "";
-            boolean isReset = reasonStr.contains("reset backup preferences");
-
-            if (isReset) {
-                Class<?> rzuClass = newRzu.getClass();
-                setFieldSilently(rzuClass, newRzu, "c", boolean.class, true);
-                setFieldSilently(rzuClass, newRzu, "d", boolean.class, true);
-                setFieldSilently(rzuClass, newRzu, "e", boolean.class, true);
-                setFieldSilently(rzuClass, newRzu, "f", boolean.class, true);
-                setFieldSilently(rzuClass, newRzu, "g", long.class, Long.MAX_VALUE);
-                setFieldSilently(rzuClass, newRzu, "h", boolean.class, true);
-                Logger.printInfo(() -> "Morphe: Prevented reset of mobile data settings, preserved defaults");
+            if (prefs.getBoolean(KEY_APPLIED, false)) {
                 return;
             }
 
-            if (oldRzu != null) {
-                long oldCap = getLongFieldSilently(oldRzu, "g", -1L);
-                long newCap = getLongFieldSilently(newRzu, "g", -1L);
-                boolean oldPhotos = getBooleanFieldSilently(oldRzu, "e", false);
-                boolean newPhotos = getBooleanFieldSilently(newRzu, "e", false);
-                boolean oldVideos = getBooleanFieldSilently(oldRzu, "f", false);
-                boolean newVideos = getBooleanFieldSilently(newRzu, "f", false);
-                boolean oldRoaming = getBooleanFieldSilently(oldRzu, "h", false);
-                boolean newRoaming = getBooleanFieldSilently(newRzu, "h", false);
-
-                boolean mobileDataModified = (oldCap != newCap) ||
-                        (oldPhotos != newPhotos) ||
-                        (oldVideos != newVideos) ||
-                        (oldRoaming != newRoaming);
-
-                if (mobileDataModified) {
-                    prefs.edit().putBoolean(KEY_USER_CUSTOMIZED_MOBILE_DATA, true).commit();
-                    Logger.printInfo(() -> "Morphe: User modified mobile data settings, marked as customized");
-                }
+            Set<String> cameraBuckets = resolveCameraBucketIds(context);
+            Set<String> existingFolders = prefs.getStringSet(KEY_LOCAL_BACKUP_FOLDERS, null);
+            Set<String> mergedFolders = new HashSet<>(cameraBuckets);
+            if (existingFolders != null) {
+                mergedFolders.addAll(existingFolders);
             }
+
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.putLong(KEY_DAILY_DATA_CAP, Long.MAX_VALUE);
+            editor.putBoolean(KEY_USE_UNRESTRICTED_DATA, true);
+            editor.putBoolean(KEY_HAS_UNRESTRICTED_DATA_OPTIONS, true);
+            editor.putBoolean(KEY_BACKUP_WHEN_ROAMING, true);
+            editor.putBoolean(KEY_USE_DATA_FOR_PHOTOS, true);
+            editor.putBoolean(KEY_USE_DATA_FOR_VIDEOS, true);
+            editor.putStringSet(KEY_LOCAL_BACKUP_FOLDERS, mergedFolders);
+            editor.putBoolean(KEY_APPLIED, true);
+            editor.commit(); // Synchronous commit to ensure immediate visibility
+
+            Logger.printInfo(() -> "Morphe: Seeded backup defaults (Unlimited, Roaming, Photos+Videos, Camera folders: " + mergedFolders.size() + ")");
         } catch (Throwable t) {
-            Logger.printException(() -> "Morphe: Error in onSavePreferences", t);
+            Logger.printException(() -> "Morphe: Failed to seed backup defaults", t);
         }
     }
 
@@ -233,37 +177,22 @@ public final class BackupSettingsHooks {
             if (context == null) return;
 
             SharedPreferences prefs = context.getSharedPreferences(BACKUP_PREFS_FILE, Context.MODE_PRIVATE);
-            boolean userCustomized = prefs.getBoolean(KEY_USER_CUSTOMIZED_MOBILE_DATA, false);
-            boolean foldersSeeded = prefs.getBoolean(KEY_FOLDERS_SEEDED, false);
+            boolean applied = prefs.getBoolean(KEY_APPLIED, false);
 
-            Class<?> rzuClass = rzuObj.getClass();
+            if (!applied) {
+                seedDefaults(context);
 
-            if (!userCustomized) {
-                setFieldSilently(rzuClass, rzuObj, "c", boolean.class, true); // has_unrestricted_data_options
-                setFieldSilently(rzuClass, rzuObj, "d", boolean.class, true); // use_unrestricted_data
-                setFieldSilently(rzuClass, rzuObj, "e", boolean.class, true); // use_data_for_photos
-                setFieldSilently(rzuClass, rzuObj, "f", boolean.class, true); // use_data_for_videos
-                setFieldSilently(rzuClass, rzuObj, "g", long.class, Long.MAX_VALUE); // daily_data_cap
-                setFieldSilently(rzuClass, rzuObj, "h", boolean.class, true); // backup_when_roaming
+                Class<?> rzuClass = rzuObj.getClass();
 
-                boolean needsSync = !prefs.getBoolean(KEY_USE_DATA_FOR_PHOTOS, false)
-                        || !prefs.getBoolean(KEY_USE_DATA_FOR_VIDEOS, false)
-                        || !prefs.getBoolean(KEY_BACKUP_WHEN_ROAMING, false)
-                        || prefs.getLong(KEY_DAILY_DATA_CAP, 0L) != Long.MAX_VALUE;
+                // Mutate fields on rzuObj (use_data_for_photos, use_data_for_videos, daily_data_cap, backup_when_roaming)
+                setFieldSilently(rzuClass, rzuObj, "c", boolean.class, true);
+                setFieldSilently(rzuClass, rzuObj, "d", boolean.class, true);
+                setFieldSilently(rzuClass, rzuObj, "e", boolean.class, true);
+                setFieldSilently(rzuClass, rzuObj, "f", boolean.class, true);
+                setFieldSilently(rzuClass, rzuObj, "g", long.class, Long.MAX_VALUE);
+                setFieldSilently(rzuClass, rzuObj, "h", boolean.class, true);
 
-                if (needsSync) {
-                    prefs.edit()
-                            .putLong(KEY_DAILY_DATA_CAP, Long.MAX_VALUE)
-                            .putBoolean(KEY_USE_UNRESTRICTED_DATA, true)
-                            .putBoolean(KEY_HAS_UNRESTRICTED_DATA_OPTIONS, true)
-                            .putBoolean(KEY_BACKUP_WHEN_ROAMING, true)
-                            .putBoolean(KEY_USE_DATA_FOR_PHOTOS, true)
-                            .putBoolean(KEY_USE_DATA_FOR_VIDEOS, true)
-                            .apply();
-                }
-            }
-
-            if (!foldersSeeded) {
+                // Update folder set in rzuObj.s (photos.backup.backup_local_folders)
                 Set<String> cameraBuckets = resolveCameraBucketIds(context);
                 Set<String> existingFolders = prefs.getStringSet(KEY_LOCAL_BACKUP_FOLDERS, null);
                 Set<String> mergedFolders = new HashSet<>(cameraBuckets);
@@ -291,19 +220,13 @@ public final class BackupSettingsHooks {
                     }
                 } catch (Throwable ignored) {}
 
-                prefs.edit()
-                        .putStringSet(KEY_LOCAL_BACKUP_FOLDERS, mergedFolders)
-                        .putBoolean(KEY_FOLDERS_SEEDED, true)
-                        .apply();
+                // Also update rzvStore.e cached field
+                try {
+                    Field eField = rzvStore.getClass().getDeclaredField("e");
+                    eField.setAccessible(true);
+                    eField.set(rzvStore, rzuObj);
+                } catch (Throwable ignored) {}
             }
-
-            // Also update rzvStore.e cached field
-            try {
-                Field eField = rzvStore.getClass().getDeclaredField("e");
-                eField.setAccessible(true);
-                eField.set(rzvStore, rzuObj);
-            } catch (Throwable ignored) {}
-
         } catch (Throwable t) {
             Logger.printException(() -> "Morphe: Error in wrapBackupPreferences", t);
         }
@@ -328,27 +251,5 @@ public final class BackupSettingsHooks {
             f.setAccessible(true);
             f.set(target, value);
         } catch (Throwable ignored) {}
-    }
-
-    private static boolean getBooleanFieldSilently(Object target, String name, boolean def) {
-        if (target == null) return def;
-        try {
-            Field f = target.getClass().getDeclaredField(name);
-            f.setAccessible(true);
-            return f.getBoolean(target);
-        } catch (Throwable ignored) {
-            return def;
-        }
-    }
-
-    private static long getLongFieldSilently(Object target, String name, long def) {
-        if (target == null) return def;
-        try {
-            Field f = target.getClass().getDeclaredField(name);
-            f.setAccessible(true);
-            return f.getLong(target);
-        } catch (Throwable ignored) {
-            return def;
-        }
     }
 }

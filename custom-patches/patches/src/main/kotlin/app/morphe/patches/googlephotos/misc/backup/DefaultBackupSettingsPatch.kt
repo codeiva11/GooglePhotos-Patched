@@ -47,17 +47,6 @@ internal object BackupPreferencesStoreGetFingerprint : Fingerprint(
     }
 )
 
-internal object BackupPreferencesStoreSaveFingerprint : Fingerprint(
-    returnType = "Z",
-    custom = { method, classDef ->
-        classDef.methods.any { it.name == "<clinit>" && it.referencesString("BackupPreferencesStore") } &&
-            method.parameters.size == 4 &&
-            method.returnType == "Z" &&
-            (method.referencesString("Cannot enable backup for a managed account") ||
-             method.referencesString("Account not found."))
-    }
-)
-
 @Suppress("unused")
 val defaultBackupSettingsPatch = bytecodePatch(
     name = "Default backup settings",
@@ -111,14 +100,6 @@ val defaultBackupSettingsPatch = bytecodePatch(
                     "invoke-static { v0, p0 }, Lapp/morphe/extension/shared/patches/BackupSettingsHooks;->wrapBackupPreferences(Ljava/lang/Object;Ljava/lang/Object;)V"
                 )
             }
-        }
-
-        // 5. Intercept BackupPreferencesStore.o() to preserve defaults on reset and track user customizations
-        BackupPreferencesStoreSaveFingerprint.methodOrNull?.let { method ->
-            method.addInstructions(
-                0,
-                "invoke-static { p1, p2, p3, p0 }, Lapp/morphe/extension/shared/patches/BackupSettingsHooks;->onSavePreferences(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V"
-            )
         }
     }
 }
