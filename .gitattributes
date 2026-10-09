@@ -1,0 +1,6 @@
+# Protect workflow and custom patches during upstream merges
+# These files will always retain our fork's version during merge conflicts
+.github/workflows/build_and_patch.yml merge=ours
+custom-patches/extensions/shared/library/src/main/java/app/morphe/extension/shared/updater/GitHubReleaseChecker.java merge=ours
+custom-patches/patches/src/main/kotlin/app/morphe/patches/googlephotos/misc/backup/DefaultBackupSettingsPatch.kt merge=ours
+custom-patches/extensions/shared/library/src/main/java/app/morphe/extension/shared/patches/BackupSettingsSeeder.java merge=ours
