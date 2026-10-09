@@ -39,14 +39,11 @@ internal object BackupPreferencesBuilderConstructorFingerprint : Fingerprint(
 internal object BackupPreferencesStoreGetFingerprint : Fingerprint(
     parameters = listOf(),
     custom = { method, classDef ->
-        if (!classDef.methods.any { it.name == "<clinit>" && it.referencesString("BackupPreferencesStore") }) {
-            return@Fingerprint false
-        }
-        val prefsReturnType = classDef.methods.firstOrNull {
-            it.parameterTypes == listOf("Landroid/content/SharedPreferences;") && it.returnType.startsWith("L")
-        }?.returnType ?: return@Fingerprint false
-
-        method.parameters.isEmpty() && method.returnType == prefsReturnType
+        classDef.methods.any { it.name == "<clinit>" && it.referencesString("BackupPreferencesStore") } &&
+            method.parameters.isEmpty() &&
+            method.returnType == classDef.methods.firstOrNull {
+                it.parameterTypes == listOf("Landroid/content/SharedPreferences;") && it.returnType.startsWith("L")
+            }?.returnType
     }
 )
 
