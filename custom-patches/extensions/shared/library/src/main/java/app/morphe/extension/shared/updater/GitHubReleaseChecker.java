@@ -45,6 +45,7 @@ public class GitHubReleaseChecker {
 
     private static final String REPO_RELEASES_URL = "https://api.github.com/repos/codeiva11/GooglePhotos-Patched/releases/latest";
     private static boolean hasCheckedThisSession = false;
+    private static final AtomicBoolean isSilentDownloading = new AtomicBoolean(false);
 
     public static void checkUpdateOnStartup(final Context context) {
         checkUpdateOnStartup(context, REPO_RELEASES_URL);
@@ -55,8 +56,6 @@ public class GitHubReleaseChecker {
             return;
         }
         hasCheckedThisSession = true;
-
-        cleanupOldDownloads(context);
 
         final String targetUrl = (customUrl != null && !customUrl.isEmpty()) ? customUrl : REPO_RELEASES_URL;
 
@@ -151,15 +150,34 @@ public class GitHubReleaseChecker {
                         final String finalDownloadUrl = downloadUrl;
                         final String finalCurrentVersion = currentVersion;
                         final boolean finalIsRebuild = isNewerBuild && !isNewerVer;
-                        final long finalAssetTime = assetUpdatedAtMillis;
                         final String finalAssetName = matchedAssetName;
-                        new Handler(Looper.getMainLooper()).post(new Runnable() {
-                            @Override
-                            public void run() {
-                                showUpdateDialog(context, latestVersion, finalDownloadUrl, finalCurrentVersion,
-                                        finalIsRebuild, finalAssetTime, finalAssetName);
-                            }
-                        });
+
+                        final String apkFileName = (matchedAssetName != null && !matchedAssetName.isEmpty())
+                                ? matchedAssetName
+                                : ("GooglePhotos-v" + latestVersion + targetFlavor + ".apk");
+
+                        File targetDir = getUpdateDirectory(context);
+                        final File finalFile = new File(targetDir, apkFileName);
+
+                        // Cleanup older downloads while preserving the target apk
+                        cleanupOldDownloads(context, apkFileName);
+
+                        if (isValidApk(context, finalFile)) {
+                            // Already completely downloaded and valid! Show instant install dialog directly
+                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    showReadyToInstallDialog(context, latestVersion, finalFile, finalCurrentVersion,
+                                            finalIsRebuild, finalAssetName);
+                                }
+                            });
+                        } else {
+                            // Silently download the APK in the background first, then prompt for instant install
+                            downloadApkSilently(context, latestVersion, finalDownloadUrl, finalCurrentVersion,
+                                    finalIsRebuild, finalAssetName, finalFile);
+                        }
+                    } else {
+                        cleanupOldDownloads(context, null);
                     }
                 } catch (Exception e) {
                     Logger.printException(() -> "Error checking for updates from GitHub", e);
@@ -727,7 +745,157 @@ public class GitHubReleaseChecker {
         return stickersDir;
     }
 
-    private static void cleanupOldDownloads(Context context) {
+    private static boolean isValidApk(Context context, File apkFile) {
+        if (apkFile == null || !apkFile.exists() || apkFile.length() < 1024 * 1024) {
+            return false;
+        }
+        try {
+            PackageManager pm = context.getPackageManager();
+            PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), 0);
+            return info != null && info.packageName != null && !info.packageName.isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void downloadApkSilently(final Context context, final String latestVersion,
+                                            final String downloadUrl, final String currentVersion,
+                                            final boolean isRebuild, final String assetName,
+                                            final File finalFile) {
+        if (!isSilentDownloading.compareAndSet(false, true)) {
+            return;
+        }
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                File tempFile = new File(finalFile.getParentFile(), finalFile.getName() + ".tmp");
+                if (tempFile.exists()) tempFile.delete();
+                if (finalFile.exists()) finalFile.delete();
+
+                HttpURLConnection conn = null;
+                InputStream in = null;
+                FileOutputStream out = null;
+
+                try {
+                    String currentUrl = downloadUrl;
+                    int redirectCount = 0;
+                    while (redirectCount < 7) {
+                        URL url = new URL(currentUrl);
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setInstanceFollowRedirects(false);
+                        conn.setRequestMethod("GET");
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile) GooglePhotos-Patched-Updater");
+                        conn.setRequestProperty("Accept-Encoding", "identity");
+                        conn.setRequestProperty("Connection", "keep-alive");
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(20000);
+
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode == HttpURLConnection.HTTP_MOVED_PERM
+                                || responseCode == HttpURLConnection.HTTP_MOVED_TEMP
+                                || responseCode == HttpURLConnection.HTTP_SEE_OTHER
+                                || responseCode == 307
+                                || responseCode == 308) {
+                            String location = conn.getHeaderField("Location");
+                            conn.disconnect();
+                            if (location != null && !location.isEmpty()) {
+                                if (location.startsWith("/")) {
+                                    URL base = new URL(currentUrl);
+                                    currentUrl = new URL(base.getProtocol(), base.getHost(), base.getPort(), location).toString();
+                                } else {
+                                    currentUrl = location;
+                                }
+                                redirectCount++;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+
+                    int code = conn.getResponseCode();
+                    if (code != HttpURLConnection.HTTP_OK) {
+                        throw new IOException("Server returned HTTP " + code);
+                    }
+
+                    in = new BufferedInputStream(conn.getInputStream(), 131072);
+                    out = new FileOutputStream(tempFile);
+
+                    byte[] buffer = new byte[131072];
+                    int bytesRead;
+                    while ((bytesRead = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                    out.flush();
+
+                    if (tempFile.renameTo(finalFile) || copyFile(tempFile, finalFile)) {
+                        tempFile.delete();
+                    } else {
+                        finalFile = tempFile;
+                    }
+
+                    if (isValidApk(context, finalFile)) {
+                        final File readyFile = finalFile;
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            @Override
+                            public void run() {
+                                showReadyToInstallDialog(context, latestVersion, readyFile, currentVersion,
+                                        isRebuild, assetName);
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    Logger.printException(() -> "Error downloading update silently in background", e);
+                    if (tempFile.exists()) tempFile.delete();
+                } finally {
+                    isSilentDownloading.set(false);
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    try { if (in != null) in.close(); } catch (Exception ignored) {}
+                    if (conn != null) conn.disconnect();
+                }
+            }
+        }).start();
+    }
+
+    private static void showReadyToInstallDialog(final Context context, final String newVersion, final File apkFile,
+                                                 final String currentVersion, final boolean isRebuild, final String assetName) {
+        if (!(context instanceof Activity) || ((Activity) context).isFinishing()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && ((Activity) context).isDestroyed()) {
+            return;
+        }
+
+        String displayName = (assetName != null && !assetName.isEmpty())
+                ? assetName
+                : ("GooglePhotos-v" + newVersion + ".apk");
+
+        String title = isRebuild ? "Build Update Ready to Install" : "Update Ready to Install";
+        String message;
+        if (isRebuild) {
+            message = "An updated build of Google Photos (v" + newVersion + ") has been downloaded silently in the background and is ready to install.\n\n" +
+                      "Package: " + displayName + "\n\n" +
+                      "Tap 'Install Now' to update instantly with zero wait time.";
+        } else {
+            message = "A new patched version of Google Photos (v" + newVersion + ") has been downloaded silently in the background and is ready to install.\n\n" +
+                      "Current version: " + currentVersion + "\n" +
+                      "New version: " + newVersion + "\n" +
+                      "Package: " + displayName + "\n\n" +
+                      "Tap 'Install Now' to update instantly with zero wait time.";
+        }
+
+        new AlertDialog.Builder(context, getDialogTheme(context))
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Install Now", (dialog, which) -> {
+                    installApk(context, apkFile);
+                })
+                .setNegativeButton("Later", null)
+                .setCancelable(true)
+                .show();
+    }
+
+    private static void cleanupOldDownloads(Context context, String activeFileName) {
         try {
             File dir = new File(context.getCacheDir(), "stickers");
             if (dir.exists() && dir.isDirectory()) {
@@ -735,6 +903,9 @@ public class GitHubReleaseChecker {
                 if (files != null) {
                     for (File file : files) {
                         if (file.isFile() && file.getName().endsWith(".apk")) {
+                            if (activeFileName != null && file.getName().equals(activeFileName)) {
+                                continue;
+                            }
                             file.delete();
                         }
                     }
@@ -749,6 +920,9 @@ public class GitHubReleaseChecker {
                 if (files != null) {
                     for (File file : files) {
                         if (file.isFile() && file.getName().startsWith("GooglePhotos-") && file.getName().endsWith(".apk")) {
+                            if (activeFileName != null && file.getName().equals(activeFileName)) {
+                                continue;
+                            }
                             file.delete();
                         }
                     }
