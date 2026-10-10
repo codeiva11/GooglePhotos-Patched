@@ -41,9 +41,7 @@ internal object BackupPreferencesStoreGetFingerprint : Fingerprint(
     custom = { method, classDef ->
         classDef.methods.any { it.name == "<clinit>" && it.referencesString("BackupPreferencesStore") } &&
             method.parameters.isEmpty() &&
-            method.returnType == classDef.methods.firstOrNull {
-                it.parameterTypes == listOf("Landroid/content/SharedPreferences;") && it.returnType.startsWith("L")
-            }?.returnType
+            method.returnType == classDef.fields.firstOrNull { it.name == "e" }?.type
     }
 )
 

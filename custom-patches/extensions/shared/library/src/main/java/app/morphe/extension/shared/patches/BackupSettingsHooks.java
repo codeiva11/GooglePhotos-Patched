@@ -32,7 +32,7 @@ public final class BackupSettingsHooks {
     private BackupSettingsHooks() {}
 
     private static final String BACKUP_PREFS_FILE = "photos.backup.backup_prefs";
-    private static final String KEY_APPLIED = "morphe_backup_defaults_applied_v6";
+    private static final String KEY_APPLIED = "morphe_backup_defaults_applied_v7";
 
     // Preference keys from APK disassembly (rzs enum)
     private static final String KEY_DAILY_DATA_CAP = "backup_prefs_daily_data_cap";
@@ -177,22 +177,10 @@ public final class BackupSettingsHooks {
             if (context == null) return;
 
             SharedPreferences prefs = context.getSharedPreferences(BACKUP_PREFS_FILE, Context.MODE_PRIVATE);
-            boolean applied = prefs.getBoolean(KEY_APPLIED, false);
+            boolean defaultsApplied = prefs.getBoolean(KEY_APPLIED, false);
 
-            if (!applied) {
-                seedDefaults(context);
-
-                Class<?> rzuClass = rzuObj.getClass();
-
-                // Mutate fields on rzuObj (use_data_for_photos, use_data_for_videos, daily_data_cap, backup_when_roaming)
-                setFieldSilently(rzuClass, rzuObj, "c", boolean.class, true);
-                setFieldSilently(rzuClass, rzuObj, "d", boolean.class, true);
-                setFieldSilently(rzuClass, rzuObj, "e", boolean.class, true);
-                setFieldSilently(rzuClass, rzuObj, "f", boolean.class, true);
-                setFieldSilently(rzuClass, rzuObj, "g", long.class, Long.MAX_VALUE);
-                setFieldSilently(rzuClass, rzuObj, "h", boolean.class, true);
-
-                // Update folder set in rzuObj.s (photos.backup.backup_local_folders)
+            if (!defaultsApplied || !prefs.getBoolean(KEY_USE_DATA_FOR_PHOTOS, false)) {
+                // Ensure default values are written to SharedPreferences
                 Set<String> cameraBuckets = resolveCameraBucketIds(context);
                 Set<String> existingFolders = prefs.getStringSet(KEY_LOCAL_BACKUP_FOLDERS, null);
                 Set<String> mergedFolders = new HashSet<>(cameraBuckets);
@@ -200,33 +188,71 @@ public final class BackupSettingsHooks {
                     mergedFolders.addAll(existingFolders);
                 }
 
-                try {
-                    Class<?> immutableSetClass = rzuClass.getClassLoader().loadClass("com.google.common.collect.ImmutableSet");
-                    Method copyOfMethod = null;
-                    for (Method m : immutableSetClass.getMethods()) {
-                        if (Modifier.isStatic(m.getModifiers()) &&
-                                m.getReturnType().equals(immutableSetClass) &&
-                                m.getParameterTypes().length == 1 &&
-                                Collection.class.isAssignableFrom(m.getParameterTypes()[0])) {
-                            copyOfMethod = m;
-                            break;
-                        }
-                    }
-                    if (copyOfMethod != null) {
-                        Object newImmutableSet = copyOfMethod.invoke(null, mergedFolders);
-                        Field sField = rzuClass.getDeclaredField("s");
-                        sField.setAccessible(true);
-                        sField.set(rzuObj, newImmutableSet);
-                    }
-                } catch (Throwable ignored) {}
-
-                // Also update rzvStore.e cached field
-                try {
-                    Field eField = rzvStore.getClass().getDeclaredField("e");
-                    eField.setAccessible(true);
-                    eField.set(rzvStore, rzuObj);
-                } catch (Throwable ignored) {}
+                SharedPreferences.Editor editor = prefs.edit();
+                editor.putLong(KEY_DAILY_DATA_CAP, Long.MAX_VALUE);
+                editor.putBoolean(KEY_USE_UNRESTRICTED_DATA, true);
+                editor.putBoolean(KEY_HAS_UNRESTRICTED_DATA_OPTIONS, true);
+                editor.putBoolean(KEY_BACKUP_WHEN_ROAMING, true);
+                editor.putBoolean(KEY_USE_DATA_FOR_PHOTOS, true);
+                editor.putBoolean(KEY_USE_DATA_FOR_VIDEOS, true);
+                editor.putStringSet(KEY_LOCAL_BACKUP_FOLDERS, mergedFolders);
+                editor.putBoolean(KEY_APPLIED, true);
+                editor.commit();
             }
+
+            Class<?> rzuClass = rzuObj.getClass();
+
+            // Read effective values from SharedPreferences (with true/Unlimited as defaults)
+            boolean useDataForPhotos = prefs.getBoolean(KEY_USE_DATA_FOR_PHOTOS, true);
+            boolean useDataForVideos = prefs.getBoolean(KEY_USE_DATA_FOR_VIDEOS, true);
+            boolean backupWhenRoaming = prefs.getBoolean(KEY_BACKUP_WHEN_ROAMING, true);
+            long dataCap = prefs.getLong(KEY_DAILY_DATA_CAP, Long.MAX_VALUE);
+            if (dataCap <= 0) {
+                dataCap = Long.MAX_VALUE;
+            }
+
+            // Always enforce active fields on the in-memory rzuObj
+            setFieldSilently(rzuClass, rzuObj, "c", boolean.class, true);
+            setFieldSilently(rzuClass, rzuObj, "d", boolean.class, true);
+            setFieldSilently(rzuClass, rzuObj, "e", boolean.class, useDataForPhotos);
+            setFieldSilently(rzuClass, rzuObj, "f", boolean.class, useDataForVideos);
+            setFieldSilently(rzuClass, rzuObj, "g", long.class, dataCap);
+            setFieldSilently(rzuClass, rzuObj, "h", boolean.class, backupWhenRoaming);
+
+            // Update folder set in rzuObj.s (photos.backup.backup_local_folders)
+            Set<String> cameraBuckets = resolveCameraBucketIds(context);
+            Set<String> existingFolders = prefs.getStringSet(KEY_LOCAL_BACKUP_FOLDERS, null);
+            Set<String> mergedFolders = new HashSet<>(cameraBuckets);
+            if (existingFolders != null) {
+                mergedFolders.addAll(existingFolders);
+            }
+
+            try {
+                Class<?> immutableSetClass = rzuClass.getClassLoader().loadClass("com.google.common.collect.ImmutableSet");
+                Method copyOfMethod = null;
+                for (Method m : immutableSetClass.getMethods()) {
+                    if (Modifier.isStatic(m.getModifiers()) &&
+                            m.getReturnType().equals(immutableSetClass) &&
+                            m.getParameterTypes().length == 1 &&
+                            Collection.class.isAssignableFrom(m.getParameterTypes()[0])) {
+                        copyOfMethod = m;
+                        break;
+                    }
+                }
+                if (copyOfMethod != null) {
+                    Object newImmutableSet = copyOfMethod.invoke(null, mergedFolders);
+                    Field sField = rzuClass.getDeclaredField("s");
+                    sField.setAccessible(true);
+                    sField.set(rzuObj, newImmutableSet);
+                }
+            } catch (Throwable ignored) {}
+
+            // Also update rzvStore.e cached field
+            try {
+                Field eField = rzvStore.getClass().getDeclaredField("e");
+                eField.setAccessible(true);
+                eField.set(rzvStore, rzuObj);
+            } catch (Throwable ignored) {}
         } catch (Throwable t) {
             Logger.printException(() -> "Morphe: Error in wrapBackupPreferences", t);
         }
