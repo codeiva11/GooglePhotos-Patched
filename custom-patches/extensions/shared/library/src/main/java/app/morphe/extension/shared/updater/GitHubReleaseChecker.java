@@ -828,14 +828,15 @@ public class GitHubReleaseChecker {
                     }
                     out.flush();
 
+                    File targetApk = finalFile;
                     if (tempFile.renameTo(finalFile) || copyFile(tempFile, finalFile)) {
                         tempFile.delete();
                     } else {
-                        finalFile = tempFile;
+                        targetApk = tempFile;
                     }
 
-                    if (isValidApk(context, finalFile)) {
-                        final File readyFile = finalFile;
+                    if (isValidApk(context, targetApk)) {
+                        final File readyFile = targetApk;
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
                             @Override
                             public void run() {
