@@ -204,6 +204,11 @@ jobs:
             echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
             KS_PASS="android"
             KEY_PASS="android"
+          elif [ -f ".github/keystore/release.keystore" ]; then
+            echo "Using repository persistent .github/keystore/release.keystore..."
+            cp .github/keystore/release.keystore release.keystore
+            KS_PASS="android"
+            KEY_PASS="android"
           else
             echo "No KEYSTORE_BASE64 secret found. Creating standalone release keystore..."
             keytool -genkeypair -v \

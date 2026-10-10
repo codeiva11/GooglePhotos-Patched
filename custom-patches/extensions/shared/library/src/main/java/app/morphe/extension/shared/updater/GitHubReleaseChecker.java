@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GitHubReleaseChecker {
 
-    private static final String REPO_RELEASES_URL = "https://api.github.com/repos/Akash-Sriram/GooglePhotos-Patched/releases/latest";
+    private static final String REPO_RELEASES_URL = "https://api.github.com/repos/codeiva11/GooglePhotos-Patched/releases/latest";
     private static boolean hasCheckedThisSession = false;
 
     public static void checkUpdateOnStartup(final Context context) {
