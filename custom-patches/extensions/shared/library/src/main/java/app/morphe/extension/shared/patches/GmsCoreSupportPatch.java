@@ -283,14 +283,8 @@ public class GmsCoreSupportPatch {
     }
 
     public static void checkMicroGLocationPermission(Activity activity) {
-        if (activity == null) return;
-        try {
-            Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-            intent.setData(Uri.parse("package:" + GMS_CORE_PACKAGE_NAME));
-            activity.startActivity(intent);
-        } catch (Throwable t) {
-            Logger.printException(() -> "Failed to open MicroG settings", t);
-        }
+        // Completely suppressed: never show MicroG location popup and never redirect to settings
+        return;
     }
 
     private static final String PREF_DEFAULT_PERMISSIONS_REQUESTED = "default_permissions_requested";
