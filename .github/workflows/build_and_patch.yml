@@ -48,7 +48,7 @@ jobs:
 
           if [ "$UPSTREAM_HEAD" != "$LOCAL_HEAD" ]; then
             echo "Attempting to merge upstream/main..."
-            if git merge upstream/main --no-edit -m "chore: sync with upstream Akash-Sriram/GooglePhotos-Patched [skip ci]"; then
+            if git merge upstream/main --no-edit -m "chore: sync with upstream Akash-Sriram/GooglePhotos-Patched"; then
               echo "Merged upstream successfully. Pushing to fork..."
               git push origin main || true
             else
