@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -35,6 +37,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -162,8 +165,8 @@ public class GitHubReleaseChecker {
                         // Cleanup older downloads while preserving the target apk
                         cleanupOldDownloads(context, apkFileName);
 
-                        if (isValidApk(context, finalFile)) {
-                            // Already completely downloaded and valid! Show instant install dialog directly
+                        if (isVerifiedUpdateApk(context, finalFile, finalDownloadUrl)) {
+                            // Already completely downloaded and verified! Show instant install dialog directly
                             new Handler(Looper.getMainLooper()).post(new Runnable() {
                                 @Override
                                 public void run() {
@@ -542,17 +545,36 @@ public class GitHubReleaseChecker {
                     }
 
                     final File installedApk = finalFile;
-                    mainHandler.post(() -> {
-                        progressBar.setIndeterminate(true);
-                        progressInfoView.setText("Download complete! Launching package installer...");
-                        speedInfoView.setText("Ready to install.");
+                    // Verify digest + signature off the main thread before installing
+                    new Thread(() -> {
+                        final boolean verified = isVerifiedUpdateApk(context, installedApk, downloadUrl);
+                        mainHandler.post(() -> {
+                            if (!verified) {
+                                progressBar.setIndeterminate(true);
+                                progressInfoView.setText("Verification failed. Update rejected.");
+                                speedInfoView.setText("Digest or signature mismatch.");
+                                installedApk.delete();
+                                mainHandler.postDelayed(() -> {
+                                    try { downloadDialog.dismiss(); } catch (Exception ignored) {}
+                                    new AlertDialog.Builder(context, getDialogTheme(context))
+                                            .setTitle("Verification Failed")
+                                            .setMessage("The downloaded update failed digest/signature verification and was not installed.")
+                                            .setPositiveButton("OK", null)
+                                            .show();
+                                }, 1500);
+                                return;
+                            }
+                            progressBar.setIndeterminate(true);
+                            progressInfoView.setText("Download complete! Launching package installer...");
+                            speedInfoView.setText("Ready to install.");
 
-                        installApk(context, installedApk);
+                            installApk(context, installedApk);
 
-                        mainHandler.postDelayed(() -> {
-                            try { downloadDialog.dismiss(); } catch (Exception ignored) {}
-                        }, 2500);
-                    });
+                            mainHandler.postDelayed(() -> {
+                                try { downloadDialog.dismiss(); } catch (Exception ignored) {}
+                            }, 2500);
+                        });
+                    }).start();
 
                 } catch (final Exception e) {
                     if (!isCancelled.get()) {
@@ -758,6 +780,140 @@ public class GitHubReleaseChecker {
         }
     }
 
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.US, "%02x", b));
+        }
+        return sb.toString();
+    }
+
+    private static java.util.Set<String> getInstalledSignatureHex(Context context) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageInfo info = pm.getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNING_CERTIFICATES);
+                if (info == null || info.signingInfo == null) return null;
+                SigningInfo signingInfo = info.signingInfo;
+                java.util.Set<String> out = new java.util.HashSet<>();
+                Signature[] signers = signingInfo.getApkContentsSigners();
+                if (signers != null) {
+                    for (Signature s : signers) out.add(bytesToHex(s.toByteArray()));
+                }
+                Signature[] history = signingInfo.getSigningCertificateHistory();
+                if (history != null) {
+                    for (Signature s : history) out.add(bytesToHex(s.toByteArray()));
+                }
+                return out.isEmpty() ? null : out;
+            } else {
+                PackageInfo info = pm.getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNATURES);
+                if (info == null || info.signatures == null) return null;
+                java.util.Set<String> out = new java.util.HashSet<>();
+                for (Signature s : info.signatures) out.add(bytesToHex(s.toByteArray()));
+                return out.isEmpty() ? null : out;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static java.util.Set<String> getArchiveSignatureHex(Context context, File apkFile) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), PackageManager.GET_SIGNING_CERTIFICATES);
+                if (info == null || info.signingInfo == null) return null;
+                Signature[] signers = info.signingInfo.getApkContentsSigners();
+                if (signers == null) return null;
+                java.util.Set<String> out = new java.util.HashSet<>();
+                for (Signature s : signers) out.add(bytesToHex(s.toByteArray()));
+                return out.isEmpty() ? null : out;
+            } else {
+                PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), PackageManager.GET_SIGNATURES);
+                if (info == null || info.signatures == null) return null;
+                java.util.Set<String> out = new java.util.HashSet<>();
+                for (Signature s : info.signatures) out.add(bytesToHex(s.toByteArray()));
+                return out.isEmpty() ? null : out;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isSignatureMatch(Context context, File apkFile) {
+        java.util.Set<String> installed = getInstalledSignatureHex(context);
+        java.util.Set<String> archive = getArchiveSignatureHex(context, apkFile);
+        if (installed == null || archive == null) return false;
+        for (String sig : archive) {
+            if (installed.contains(sig)) return true;
+        }
+        return false;
+    }
+
+    private static String computeSha256(File file) {
+        InputStream in = null;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            in = new BufferedInputStream(new FileInputStream(file), 131072);
+            byte[] buffer = new byte[131072];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+            return bytesToHex(digest.digest());
+        } catch (Exception e) {
+            return null;
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private static String fetchExpectedDigest(String apkDownloadUrl) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(apkDownloadUrl + ".sha256");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "GooglePhotos-Patched-App");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            if (conn.getResponseCode() != 200) return null;
+            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            String body = reader.readLine();
+            reader.close();
+            if (body == null) return null;
+            String token = body.trim().split("\\s+")[0].toLowerCase(Locale.US);
+            if (token.matches("[0-9a-f]{64}")) return token;
+            return null;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static boolean isVerifiedUpdateApk(Context context, File apkFile, String apkDownloadUrl) {
+        if (!isValidApk(context, apkFile)) {
+            Logger.printInfo(() -> "Update APK failed validity check");
+            return false;
+        }
+        if (!isSignatureMatch(context, apkFile)) {
+            Logger.printInfo(() -> "Update APK signature does not match installed app, rejecting");
+            return false;
+        }
+        String expectedDigest = (apkDownloadUrl != null) ? fetchExpectedDigest(apkDownloadUrl) : null;
+        if (expectedDigest != null) {
+            String actualDigest = computeSha256(apkFile);
+            if (actualDigest == null || !expectedDigest.equals(actualDigest)) {
+                Logger.printInfo(() -> "Update APK digest mismatch, rejecting");
+                return false;
+            }
+        } else {
+            Logger.printInfo(() -> "No digest published for this update, signature check passed");
+        }
+        return true;
+    }
+
     private static void downloadApkSilently(final Context context, final String latestVersion,
                                             final String downloadUrl, final String currentVersion,
                                             final boolean isRebuild, final String assetName,
@@ -835,7 +991,7 @@ public class GitHubReleaseChecker {
                         targetApk = tempFile;
                     }
 
-                    if (isValidApk(context, targetApk)) {
+                    if (isVerifiedUpdateApk(context, targetApk, downloadUrl)) {
                         final File readyFile = targetApk;
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
                             @Override
@@ -844,6 +1000,9 @@ public class GitHubReleaseChecker {
                                         isRebuild, assetName);
                             }
                         });
+                    } else {
+                        targetApk.delete();
+                        Logger.printInfo(() -> "Silently downloaded update failed verification, deleted");
                     }
                 } catch (Exception e) {
                     Logger.printException(() -> "Error downloading update silently in background", e);
