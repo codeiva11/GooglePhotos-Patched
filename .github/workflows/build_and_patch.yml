@@ -301,6 +301,4 @@ jobs:
             echo "Creating new release $TAG in $GH_REPO..."
             gh release create "$TAG" "$APK_MOD" "$APK_ORIGINAL" "${APK_MOD}.sha256" "${APK_ORIGINAL}.sha256" --repo "$GH_REPO" --title "$TITLE" --latest
           fi
-            gh release create "$TAG" "$APK_MOD" "$APK_ORIGINAL" --repo "$GH_REPO" --title "$TITLE" --latest
-          fi
 
