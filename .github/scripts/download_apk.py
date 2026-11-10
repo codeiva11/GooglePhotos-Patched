@@ -636,6 +636,101 @@ def download_google_play_splits(output_path):
 
 
 # ---------------------------------------------------------------------------
+# Source 0: APKPure official app API (no Cloudflare, direct CDN download)
+# ---------------------------------------------------------------------------
+
+APKPURE_API_URL = "https://tapi.pureapk.com/v3/get_app_his_version"
+APKPURE_PACKAGE = "com.google.android.apps.photos"
+APKPURE_API_HEADERS = {
+    "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 13; Pixel 5 Build/TQ3A.230901.001); APKPure/3.20.34 (Aegon)",
+    "Ual-Access-Businessid": "projecta",
+    "Ual-Access-ProjectA": '{"device_info":{"abis":["x86_64","arm64-v8a","x86","armeabi-v7a","armeabi"],"android_id":"50f838123d9a9c94","brand":"google","country":"United States","country_code":"US","imei":"","language":"en-US","manufacturer":"Google","mode":"Pixel 5","os_ver":"33","os_ver_name":"13","platform":1,"product":"redfin","screen_height":1080,"screen_width":1920},"host_app_info":{"build_no":"468","channel":"","md5":"6756e53158d6f6c013650a40d8f1147b","pkg_name":"com.apkpure.aegon","sdk_ver":"3.20.34","version_code":3203427,"version_name":"3.20.34"}}',
+    "Connection": "Keep-Alive",
+    "Accept-Encoding": "gzip",
+}
+
+
+def download_apkpure_api(output_path):
+    """Download Google Photos via APKPure's official app API.
+
+    The API needs no Cloudflare bypass and returns direct CDN links.
+    Prefers a plain APK asset (not XAPK) for the version the APKMirror
+    feed reports as latest, so the release tag stays consistent.
+    Returns (True, version_str) on success, (False, None) otherwise.
+    """
+    try:
+        target_ver = check_version_feed()
+        if not target_ver:
+            print("[APKPure] Could not determine latest version from feed; using API latest.")
+        print(f"[APKPure] Querying API for {APKPURE_PACKAGE} (target: {target_ver})...")
+
+        if HAS_CURL_CFFI:
+            session = cffi_requests.Session(impersonate="chrome131")
+            resp = session.get(APKPURE_API_URL, headers=APKPURE_API_HEADERS,
+                               params={"package_name": APKPURE_PACKAGE, "hl": "en"}, timeout=30)
+            if resp.status_code != 200:
+                print(f"[APKPure] API returned HTTP {resp.status_code}")
+                return False, None
+            data = resp.json()
+        else:
+            import urllib.request, gzip as _gzip
+            qs = urllib.parse.urlencode({"package_name": APKPURE_PACKAGE, "hl": "en"})
+            req = urllib.request.Request(f"{APKPURE_API_URL}?{qs}", headers=APKPURE_API_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    raw = _gzip.decompress(raw)
+            data = json.loads(raw)
+
+        versions = data.get("version_list") or []
+        if not versions:
+            print("[APKPure] API returned no versions.")
+            return False, None
+
+        candidates = []
+        for v in versions:
+            urls = (v.get("asset") or {}).get("urls") or []
+            apk_urls = [u for u in urls if "/APK/" in u]
+            if apk_urls:
+                candidates.append((v.get("version_name", ""), apk_urls[0]))
+        if not candidates:
+            print("[APKPure] No plain-APK asset found (only XAPK).")
+            return False, None
+
+        chosen_ver, dl_url = None, None
+        if target_ver:
+            for ver, u in candidates:
+                if ver == target_ver:
+                    chosen_ver, dl_url = ver, u
+                    break
+        if not dl_url:
+            chosen_ver, dl_url = candidates[0]
+            print(f"[APKPure] Target {target_ver} not in API list; using latest {chosen_ver}.")
+
+        print(f"[APKPure] Downloading v{chosen_ver}: {dl_url[:110]}...")
+        dl_headers = {**HEADERS, "Referer": "https://apkpure.net/"}
+        if HAS_CURL_CFFI:
+            session = cffi_requests.Session(impersonate="chrome131")
+            r2 = session.get(dl_url, headers=dl_headers, timeout=120, stream=True)
+            if r2.status_code != 200:
+                print(f"[APKPure] Download HTTP {r2.status_code}")
+                return False, None
+            _stream_to_file(r2, output_path)
+        else:
+            download_file(dl_url, output_path, extra_headers={"Referer": "https://apkpure.net/"})
+
+        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        if size < 1_000_000:
+            print(f"[APKPure] Downloaded file too small ({size} bytes).")
+            return False, None
+        print(f"[APKPure] Downloaded {output_path} ({size:,} bytes)")
+        return True, chosen_ver
+    except Exception as e:
+        print(f"[APKPure] Failed: {e}")
+        return False, None
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -665,6 +760,15 @@ def main():
         download_file(args.direct_url, args.output)
         version_str = "unknown"
     else:
+        # Try APKPure API first: official app API, no Cloudflare, direct CDN link.
+        apkpure_ok = False
+        if not args.check_version:
+            ap_success, ap_ver = download_apkpure_api(args.output)
+            if ap_success:
+                version_str = ap_ver or "unknown"
+                apkpure_ok = True
+            else:
+                print("[Downloader] APKPure API failed; trying next source...")
         # Try Google Play download + merge first if not just checking version
         if not args.check_version:
             gp_success, gp_ver = download_google_play_splits(args.output)
@@ -677,10 +781,12 @@ def main():
 
             print("[Downloader] Falling back to [Source 2/2] APKMirror standalone APK...")
 
-        version_str = "unknown"
-        success = False
+        version_str = version_str if apkpure_ok else "unknown"
+        success = apkpure_ok
         last_error = None
-        for attempt in range(1, args.retries + 1):
+        if success:
+            print(f"[Downloader] APKPure download complete (v{version_str}); skipping APKMirror.")
+        for attempt in ([] if success else range(1, args.retries + 1)):
             print(f"\n=== Download attempt {attempt}/{args.retries} ===")
             # Try fast path first, fall back to Playwright
             try:
