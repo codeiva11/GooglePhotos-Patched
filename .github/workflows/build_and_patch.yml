@@ -150,6 +150,13 @@ jobs:
           echo "Downloading Morphe Desktop CLI from $CLI_URL"
           curl -L -o morphe-cli.jar "$CLI_URL"
 
+      - name: Install Google Play Downloader (goopdl + APKEditor)
+        if: steps.check_release.outputs.skip != 'true'
+        run: |
+          pip install "goopdl==1.2.2"
+          curl -L -o APKEditor.jar https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar
+          echo "APKEDITOR_JAR=$PWD/APKEditor.jar" >> $GITHUB_ENV
+
       - name: Download Google Photos APK
         if: steps.check_release.outputs.skip != 'true'
         id: download_apk
