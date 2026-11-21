@@ -9,6 +9,10 @@ on:
         description: 'Direct APK Download URL (Optional fallback if APKMirror scraping fails)'
         required: false
         type: string
+      target_apk_version:
+        description: 'Pin base APK version (e.g. 8.1.0.1023737660) — use when the newest base is newer than the patch bundle supports'
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -162,8 +166,11 @@ jobs:
         id: download_apk
         run: |
           DIRECT_URL="${{ inputs.direct_apk_url }}"
+          TARGET_VER="${{ inputs.target_apk_version }}"
           if [ -n "$DIRECT_URL" ]; then
             python .github/scripts/download_apk.py --direct-url "$DIRECT_URL" --output google-photos-base.apk
+          elif [ -n "$TARGET_VER" ]; then
+            python .github/scripts/download_apk.py --target-version "$TARGET_VER" --retries 3 --output google-photos-base.apk
           else
             python .github/scripts/download_apk.py --retries 3 --output google-photos-base.apk
           fi
