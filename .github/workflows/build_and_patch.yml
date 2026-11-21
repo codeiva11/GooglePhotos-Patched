@@ -146,10 +146,18 @@ jobs:
 
       - name: Setup Morphe CLI
         if: steps.check_release.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CLI_URL=$(curl -s https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest | grep "browser_download_url.*morphe-desktop.*all.jar" | cut -d '"' -f 4 | head -n 1)
+          # Unauthenticated api.github.com calls from shared runner IPs often hit
+          # the 60/hr rate limit and return no asset URL, which used to fall back
+          # to CLI v1.16.0 — too old for the patches-1.18.0 bundle (it lacks
+          # app.morphe.patcher.patch.FormFactor, run 44938163233 failed loading
+          # patches with NoClassDefFoundError). Authenticate the lookup, and fall
+          # back to v2.2.0, the last CLI proven with this bundle (run 44876308660).
+          CLI_URL=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-desktop/releases/latest | grep "browser_download_url.*morphe-desktop.*all.jar" | cut -d '"' -f 4 | head -n 1)
           if [ -z "$CLI_URL" ]; then
-            CLI_URL="https://github.com/MorpheApp/morphe-desktop/releases/download/v1.16.0/morphe-desktop-1.16.0-all.jar"
+            CLI_URL="https://github.com/MorpheApp/morphe-desktop/releases/download/v2.2.0/morphe-desktop-2.2.0-all.jar"
           fi
           echo "Downloading Morphe Desktop CLI from $CLI_URL"
           curl -L -o morphe-cli.jar "$CLI_URL"
