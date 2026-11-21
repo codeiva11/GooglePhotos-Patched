@@ -650,16 +650,19 @@ APKPURE_API_HEADERS = {
 }
 
 
-def download_apkpure_api(output_path):
+def download_apkpure_api(output_path, target_override=None):
     """Download Google Photos via APKPure's official app API.
 
     The API needs no Cloudflare bypass and returns direct CDN links.
     Prefers a plain APK asset (not XAPK) for the version the APKMirror
     feed reports as latest, so the release tag stays consistent.
+    When target_override is given (e.g. a pinned older version), that
+    version is downloaded instead — used when the newest base APK is
+    newer than the patch bundle supports.
     Returns (True, version_str) on success, (False, None) otherwise.
     """
     try:
-        target_ver = check_version_feed()
+        target_ver = target_override or check_version_feed()
         if not target_ver:
             print("[APKPure] Could not determine latest version from feed; using API latest.")
         print(f"[APKPure] Querying API for {APKPURE_PACKAGE} (target: {target_ver})...")
@@ -704,6 +707,9 @@ def download_apkpure_api(output_path):
                     chosen_ver, dl_url = ver, u
                     break
         if not dl_url:
+            if target_override:
+                print(f"[APKPure] Pinned target {target_ver} not in API list; refusing to fall back to latest.")
+                return False, None
             chosen_ver, dl_url = candidates[0]
             print(f"[APKPure] Target {target_ver} not in API list; using latest {chosen_ver}.")
 
@@ -738,6 +744,7 @@ def download_apkpure_api(output_path):
 def main():
     parser = argparse.ArgumentParser(description="Download Google Photos APK from APKMirror or Google Play")
     parser.add_argument("--direct-url", type=str, help="Skip scraping; download this URL directly")
+    parser.add_argument("--target-version", type=str, default=None, help="Pin base APK version (e.g. 8.1.0.1023737660) instead of latest")
     parser.add_argument("--variant-url", type=str, default=DEFAULT_VARIANT_URL)
     parser.add_argument("--output", type=str, default="google-photos.apk")
     parser.add_argument("--check-version", action="store_true")
@@ -763,7 +770,7 @@ def main():
         # Try APKPure API first: official app API, no Cloudflare, direct CDN link.
         apkpure_ok = False
         if not args.check_version:
-            ap_success, ap_ver = download_apkpure_api(args.output)
+            ap_success, ap_ver = download_apkpure_api(args.output, args.target_version)
             if ap_success:
                 version_str = ap_ver or "unknown"
                 apkpure_ok = True
