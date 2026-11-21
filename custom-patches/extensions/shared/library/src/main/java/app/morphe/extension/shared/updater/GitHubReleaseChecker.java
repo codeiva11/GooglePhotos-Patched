@@ -552,13 +552,13 @@ public class GitHubReleaseChecker {
                             if (!verified) {
                                 progressBar.setIndeterminate(true);
                                 progressInfoView.setText("Verification failed. Update rejected.");
-                                speedInfoView.setText("Digest or signature mismatch.");
+                                speedInfoView.setText("Digest, signature or package mismatch.");
                                 installedApk.delete();
                                 mainHandler.postDelayed(() -> {
                                     try { downloadDialog.dismiss(); } catch (Exception ignored) {}
                                     new AlertDialog.Builder(context, getDialogTheme(context))
                                             .setTitle("Verification Failed")
-                                            .setMessage("The downloaded update failed digest/signature verification and was not installed.")
+                                            .setMessage("The downloaded update failed digest/signature/package verification and was not installed.")
                                             .setPositiveButton("OK", null)
                                             .show();
                                 }, 1500);
@@ -892,9 +892,24 @@ public class GitHubReleaseChecker {
         }
     }
 
+    private static boolean isPackageMatch(Context context, File apkFile) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), 0);
+            if (info == null || info.packageName == null) return false;
+            return info.packageName.equals(context.getPackageName());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private static boolean isVerifiedUpdateApk(Context context, File apkFile, String apkDownloadUrl) {
         if (!isValidApk(context, apkFile)) {
             Logger.printInfo(() -> "Update APK failed validity check");
+            return false;
+        }
+        if (!isPackageMatch(context, apkFile)) {
+            Logger.printInfo(() -> "Update APK package name does not match installed app, rejecting");
             return false;
         }
         if (!isSignatureMatch(context, apkFile)) {
